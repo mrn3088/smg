@@ -1273,7 +1273,8 @@ impl QwenVLProcessorBase {
         };
         let writer = WireWriter::new(&batch.norm, dtype)?;
         let element_size = writer.element_size();
-        let mut wire: Vec<u8> = vec![0u8; batch.total_patch_values * element_size];
+        let wire_len = batch.total_patch_values * element_size;
+        let mut wire: Vec<u8> = vec![0u8; wire_len];
         let mut bands = Vec::with_capacity(images.len());
         let mut remaining = wire.as_mut_slice();
         for plan in &batch.plans {
@@ -1284,37 +1285,44 @@ impl QwenVLProcessorBase {
         let filter = batch.filter;
         let writer = &writer;
         let mut errors: Vec<Option<TransformError>> = (0..images.len()).map(|_| None).collect();
-        parallel_scope(|scope| {
-            for (((image, plan), band), error_slot) in images
-                .iter()
-                .zip(&batch.plans)
-                .zip(bands)
-                .zip(errors.iter_mut())
-            {
-                scope.spawn(move |_| {
-                    let resized;
-                    let img_ref = if plan.needs_resize {
-                        resized = if filter == FilterType::CatmullRom {
-                            resize_bicubic_torch_aa(image, plan.target_width, plan.target_height)
-                        } else {
-                            resize(image, plan.target_width, plan.target_height, filter)
-                        };
-                        &resized
-                    } else {
-                        image
-                    };
-                    *error_slot = self
-                        .patchify_image_rgb_wire_into(
-                            img_ref,
-                            plan.grid_h,
-                            plan.grid_w,
-                            band,
-                            writer,
-                        )
-                        .err();
-                });
+        // One image's resize and patch layout into its band: the work of one
+        // task, whether it runs here or on the pool.
+        let per_image = |image: &DynamicImage, plan: &QwenImagePlan, band: &mut [u8]| {
+            let resized;
+            let img_ref = if plan.needs_resize {
+                resized = if filter == FilterType::CatmullRom {
+                    resize_bicubic_torch_aa(image, plan.target_width, plan.target_height)
+                } else {
+                    resize(image, plan.target_width, plan.target_height, filter)
+                };
+                &resized
+            } else {
+                image
+            };
+            self.patchify_image_rgb_wire_into(img_ref, plan.grid_h, plan.grid_w, band, writer)
+                .err()
+        };
+        let items = images
+            .iter()
+            .zip(&batch.plans)
+            .zip(bands)
+            .zip(errors.iter_mut());
+        if task_count(wire_len, images.len(), 1) <= 1 {
+            // One image, the inline mode, or a pool busy with other
+            // operations: on the calling thread, image after image.
+            for (((image, plan), band), error_slot) in items {
+                *error_slot = per_image(image, plan, band);
             }
-        });
+        } else {
+            let per_image = &per_image;
+            parallel_scope(|scope| {
+                for (((image, plan), band), error_slot) in items {
+                    scope.spawn(move |_| {
+                        *error_slot = per_image(image, plan, band);
+                    });
+                }
+            });
+        }
         if let Some(error) = errors.into_iter().flatten().next() {
             return Some(Err(error));
         }
@@ -1499,44 +1507,53 @@ impl VisionPreProcessor for QwenVLProcessorBase {
             remaining = rest;
         }
         let mut errors: Vec<Option<TransformError>> = (0..images.len()).map(|_| None).collect();
-        parallel_scope(|scope| {
-            for (((image, plan), band), error_slot) in images
-                .iter()
-                .zip(image_plans)
-                .zip(bands)
-                .zip(errors.iter_mut())
-            {
-                scope.spawn(move |_| {
-                    // BICUBIC (Qwen default) uses the torchvision `uint8` kernel
-                    // the family's reference processors run; other filters keep
-                    // the SIMD path.
-                    let resized;
-                    let img_ref = if plan.needs_resize {
-                        resized = if filter == FilterType::CatmullRom {
-                            resize_bicubic_torch_aa(image, plan.target_width, plan.target_height)
-                        } else {
-                            resize(image, plan.target_width, plan.target_height, filter)
-                        };
-                        &resized
-                    } else {
-                        image
-                    };
-                    // Patchify directly from RGB bytes to avoid the intermediate
-                    // [C,H,W] tensor allocation. This matches the tensor path's
-                    // channel/temporal/spatial order.
-                    let mut out_idx = 0;
-                    let outcome = self.patchify_image_rgb_into(
-                        img_ref,
-                        plan.grid_h,
-                        plan.grid_w,
-                        band,
-                        &mut out_idx,
-                    );
-                    debug_assert!(outcome.is_err() || out_idx == band.len());
-                    *error_slot = outcome.err();
-                });
+        // One image's resize and patch layout into its band: the work of one
+        // task, whether it runs here or on the pool.
+        let per_image = |image: &DynamicImage, plan: &QwenImagePlan, band: &mut [u8]| {
+            // BICUBIC (Qwen default) uses the torchvision `uint8` kernel the
+            // family's reference processors run; other filters keep the SIMD
+            // path.
+            let resized;
+            let img_ref = if plan.needs_resize {
+                resized = if filter == FilterType::CatmullRom {
+                    resize_bicubic_torch_aa(image, plan.target_width, plan.target_height)
+                } else {
+                    resize(image, plan.target_width, plan.target_height, filter)
+                };
+                &resized
+            } else {
+                image
+            };
+            // Patchify directly from RGB bytes to avoid the intermediate
+            // [C,H,W] tensor allocation. This matches the tensor path's
+            // channel/temporal/spatial order.
+            let mut out_idx = 0;
+            let outcome =
+                self.patchify_image_rgb_into(img_ref, plan.grid_h, plan.grid_w, band, &mut out_idx);
+            debug_assert!(outcome.is_err() || out_idx == band.len());
+            outcome.err()
+        };
+        let items = images
+            .iter()
+            .zip(image_plans)
+            .zip(bands)
+            .zip(errors.iter_mut());
+        if task_count(total_patch_values, images.len(), 1) <= 1 {
+            // One image, the inline mode, or a pool busy with other
+            // operations: on the calling thread, image after image.
+            for (((image, plan), band), error_slot) in items {
+                *error_slot = per_image(image, plan, band);
             }
-        });
+        } else {
+            let per_image = &per_image;
+            parallel_scope(|scope| {
+                for (((image, plan), band), error_slot) in items {
+                    scope.spawn(move |_| {
+                        *error_slot = per_image(image, plan, band);
+                    });
+                }
+            });
+        }
         if let Some(error) = errors.into_iter().flatten().next() {
             return Err(error);
         }
@@ -1654,7 +1671,42 @@ impl VisionPreProcessor for QwenVLProcessorBase {
         }
 
         let values_per_group = plan.grid_h * plan.grid_w * plan.patch_features;
+        // The temporal groups from `first_group` on, into `output_band`: the
+        // work of one band, whether it runs here or on the pool.
+        let fill_band = |first_group: usize,
+                         output_band: &mut [u8]|
+         -> Result<(), TransformError> {
+            for (group_offset, group_output) in output_band.chunks_mut(values_per_group).enumerate()
+            {
+                let temporal_index = first_group + group_offset;
+                let prepared = prepare_video_rgb_chunk(
+                    frames,
+                    temporal_index,
+                    temporal_patch_size,
+                    plan.target_width,
+                    plan.target_height,
+                    plan.filter,
+                    plan.do_resize,
+                )?;
+                let mut output_index = 0;
+                self.patchify_video_rgb_chunk_into(
+                    &prepared,
+                    plan.grid_h,
+                    plan.grid_w,
+                    group_output,
+                    &mut output_index,
+                )?;
+                debug_assert_eq!(output_index, group_output.len());
+            }
+            Ok(())
+        };
         let parallel_tasks = task_count(all_patches.len(), plan.grid_t, 1);
+        if parallel_tasks <= 1 {
+            // The whole clip on the calling thread: a small clip, the inline
+            // mode, or a pool busy with other operations.
+            fill_band(0, &mut all_patches)?;
+            return Self::finish_video(plan, all_patches);
+        }
         let groups_per_task = plan.grid_t.div_ceil(parallel_tasks);
         let mut errors = (0..parallel_tasks).map(|_| None).collect::<Vec<_>>();
         parallel_scope(|scope| {
@@ -1663,35 +1715,9 @@ impl VisionPreProcessor for QwenVLProcessorBase {
                 .zip(errors.iter_mut())
                 .enumerate()
             {
-                let first_group = task_index * groups_per_task;
+                let fill_band = &fill_band;
                 scope.spawn(move |_| {
-                    let outcome = (|| {
-                        for (group_offset, group_output) in
-                            output_band.chunks_mut(values_per_group).enumerate()
-                        {
-                            let temporal_index = first_group + group_offset;
-                            let prepared = prepare_video_rgb_chunk(
-                                frames,
-                                temporal_index,
-                                temporal_patch_size,
-                                plan.target_width,
-                                plan.target_height,
-                                plan.filter,
-                                plan.do_resize,
-                            )?;
-                            let mut output_index = 0;
-                            self.patchify_video_rgb_chunk_into(
-                                &prepared,
-                                plan.grid_h,
-                                plan.grid_w,
-                                group_output,
-                                &mut output_index,
-                            )?;
-                            debug_assert_eq!(output_index, group_output.len());
-                        }
-                        Ok::<_, TransformError>(())
-                    })();
-                    *error_slot = outcome.err();
+                    *error_slot = fill_band(task_index * groups_per_task, output_band).err();
                 });
             }
         });

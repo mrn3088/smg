@@ -18,6 +18,13 @@
 //! one image on an idle host spreads across the pool while eight concurrent
 //! images each keep their caller's thread instead of queueing behind one
 //! another's bands. The bytes do not depend on the split.
+//!
+//! That changes what the pool's size bounds. Before, every large operation's
+//! bands ran on the pool's threads while their callers waited, so large-image
+//! preprocessing used about that many cores at most. Now an operation that
+//! finds the pool busy runs on its caller's thread, so preprocessing under
+//! load uses about the pool's threads plus one per concurrent request;
+//! `SMG_MM_THREADS` sizes the split of one image, not the total.
 
 use std::{
     marker::PhantomData,
@@ -33,7 +40,10 @@ const MAX_TASKS_PER_OPERATION: usize = 8;
 /// Threads in the dedicated pool when the host names no size: enough to
 /// split one large image, few enough to leave the host its cores.
 const DEFAULT_POOL_THREADS: usize = 8;
-/// Overrides the dedicated pool's size (a positive thread count).
+/// Overrides the dedicated pool's size (a positive thread count): how many
+/// threads one image's stages may spread over. An operation that finds the
+/// pool busy runs on its caller's thread rather than waiting for it, so this
+/// is not a cap on the preprocessing CPU under load.
 pub const POOL_THREADS_ENV: &str = "SMG_MM_THREADS";
 /// Prefix of the dedicated pool's thread names.
 pub const POOL_THREAD_NAME_PREFIX: &str = "smg-mm-";
@@ -238,24 +248,32 @@ mod tests {
         assert!(threads.get() <= DEFAULT_POOL_THREADS);
     }
 
+    /// Tests that drive the shared pool take this, so a count one of them
+    /// reads is not moved by another's tasks.
+    static POOL_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn a_busy_pool_keeps_a_new_operation_whole() {
         use std::{
             sync::{mpsc, Mutex},
             time::{Duration, Instant},
         };
+        let _serial = POOL_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let Parallelism::Pool(threads) = parallelism() else {
             return;
         };
         let threads = threads.get();
+        let before = BUSY_TASKS.load(Ordering::Relaxed);
         let (release, held) = mpsc::channel::<()>();
         let held = Mutex::new(held);
-        std::thread::scope(|threads_scope| {
+        let split = std::thread::scope(|threads_scope| {
             threads_scope.spawn(|| {
                 scope(|spawner| {
                     for _ in 0..threads {
                         spawner.spawn(|_| {
-                            // Holds a pool thread until the test releases it.
+                            // Holds a pool thread until released.
                             let _ = held
                                 .lock()
                                 .expect("receiver")
@@ -265,20 +283,36 @@ mod tests {
                 });
             });
             let deadline = Instant::now() + Duration::from_secs(5);
-            while BUSY_TASKS.load(Ordering::Relaxed) < threads && Instant::now() < deadline {
+            while BUSY_TASKS.load(Ordering::Relaxed) < before + threads && Instant::now() < deadline
+            {
                 std::thread::sleep(Duration::from_millis(1));
             }
-            assert_eq!(task_count(PARALLEL_MIN_BYTES, usize::MAX, 1), 1);
+            let split = task_count(PARALLEL_MIN_BYTES, usize::MAX, 1);
+            // Released before any assertion, so a failure cannot wait out
+            // the holds.
             for _ in 0..threads {
                 let _ = release.send(());
             }
+            drop(release);
+            split
         });
-        assert!(task_count(PARALLEL_MIN_BYTES, usize::MAX, 1) >= 1);
+        assert_eq!(
+            split, 1,
+            "a pool held by {threads} tasks splits a new operation no further"
+        );
+        assert_eq!(
+            BUSY_TASKS.load(Ordering::Relaxed),
+            before,
+            "the count returns once the tasks do"
+        );
     }
 
     #[test]
     fn a_scope_runs_every_task_once() {
         use std::sync::atomic::{AtomicUsize, Ordering};
+        let _serial = POOL_TESTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let count = AtomicUsize::new(0);
         scope(|spawner| {
             for _ in 0..16 {
