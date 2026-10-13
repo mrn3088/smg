@@ -19,12 +19,10 @@
 //! images each keep their caller's thread instead of queueing behind one
 //! another's bands. The bytes do not depend on the split.
 //!
-//! That changes what the pool's size bounds. Before, every large operation's
-//! bands ran on the pool's threads while their callers waited, so large-image
-//! preprocessing used about that many cores at most. Now an operation that
-//! finds the pool busy runs on its caller's thread, so preprocessing under
-//! load uses about the pool's threads plus one per concurrent request;
-//! `SMG_MM_THREADS` sizes the split of one image, not the total.
+//! The pool's size therefore bounds one image's split, not the total: an
+//! operation that finds the pool busy runs on its caller's thread, so
+//! preprocessing under load uses about the pool's threads plus one per
+//! concurrent request.
 
 use std::{
     marker::PhantomData,
@@ -248,8 +246,9 @@ mod tests {
         assert!(threads.get() <= DEFAULT_POOL_THREADS);
     }
 
-    /// Tests that drive the shared pool take this, so a count one of them
-    /// reads is not moved by another's tasks.
+    /// The two tests of this module that hold the shared pool take this, so
+    /// neither holds it under the other; tests elsewhere in the binary spawn
+    /// on the pool too, which is why the counts below are read with slack.
     static POOL_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
@@ -300,10 +299,17 @@ mod tests {
             split, 1,
             "a pool held by {threads} tasks splits a new operation no further"
         );
-        assert_eq!(
-            BUSY_TASKS.load(Ordering::Relaxed),
-            before,
-            "the count returns once the tasks do"
+        // The count returns once the held tasks do. Other tests of the binary
+        // spawn on the pool as well, so the count is not exact at an instant:
+        // what holds is that it comes back down to, or below, its reading
+        // before the holds, within the time their tasks take.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while BUSY_TASKS.load(Ordering::Relaxed) > before && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            BUSY_TASKS.load(Ordering::Relaxed) <= before,
+            "the count did not return once the held tasks did"
         );
     }
 
