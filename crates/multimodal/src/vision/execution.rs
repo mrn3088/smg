@@ -12,8 +12,21 @@
 //! entry wakes a share of those workers whether or not there is work for
 //! them. Preprocessing a single image is sub-millisecond, so on a large host
 //! the wake-ups cost several times the work itself.
+//!
+//! Under load the pool is shared by every request. A split is bounded by the
+//! pool's free share, counted from the tasks spawned and not yet returned, so
+//! one image on an idle host spreads across the pool while eight concurrent
+//! images each keep their caller's thread instead of queueing behind one
+//! another's bands. The bytes do not depend on the split.
 
-use std::{marker::PhantomData, num::NonZeroUsize, sync::OnceLock};
+use std::{
+    marker::PhantomData,
+    num::NonZeroUsize,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        OnceLock,
+    },
+};
 
 const PARALLEL_MIN_BYTES: usize = 1 << 19;
 const MAX_TASKS_PER_OPERATION: usize = 8;
@@ -54,6 +67,26 @@ impl Parallelism {
 
 static PARALLELISM: OnceLock<Parallelism> = OnceLock::new();
 static POOL: OnceLock<Option<rayon::ThreadPool>> = OnceLock::new();
+/// Tasks spawned on the pool and not yet returned: the pool's busy share,
+/// which a new operation's split leaves alone.
+static BUSY_TASKS: AtomicUsize = AtomicUsize::new(0);
+
+/// One task counted in [`BUSY_TASKS`] from its spawn until it returns or
+/// unwinds.
+struct BusyTask;
+
+impl BusyTask {
+    fn begin() -> Self {
+        BUSY_TASKS.fetch_add(1, Ordering::Relaxed);
+        BusyTask
+    }
+}
+
+impl Drop for BusyTask {
+    fn drop(&mut self) {
+        BUSY_TASKS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
 
 /// Choose where preprocessing runs, once per process, before the first
 /// preprocessing call. Returns the mode already in force when it differs
@@ -111,11 +144,15 @@ impl<'scope> Spawner<'_, 'scope> {
         F: FnOnce(&Spawner<'_, 'scope>) + Send + 'scope,
     {
         match self.inner {
-            SpawnerInner::Pool(scope) => scope.spawn(move |scope| {
-                task(&Spawner {
-                    inner: SpawnerInner::Pool(scope),
+            SpawnerInner::Pool(scope) => {
+                let busy = BusyTask::begin();
+                scope.spawn(move |scope| {
+                    let _busy = busy;
+                    task(&Spawner {
+                        inner: SpawnerInner::Pool(scope),
+                    });
                 });
-            }),
+            }
             SpawnerInner::Inline(_) => task(&Spawner {
                 inner: SpawnerInner::Inline(PhantomData),
             }),
@@ -147,7 +184,9 @@ where
 }
 
 /// How many tasks to split an operation into: one unless the output is
-/// large and the mode runs tasks concurrently.
+/// large, the mode runs tasks concurrently and the pool has threads to
+/// spare; an operation that finds the pool busy runs whole on its caller's
+/// thread rather than queueing its bands behind other operations' tasks.
 pub(crate) fn task_count(
     output_bytes: usize,
     work_items: usize,
@@ -161,8 +200,12 @@ pub(crate) fn task_count(
     if output_bytes < PARALLEL_MIN_BYTES || work_items < 2 * min_items_per_task {
         return 1;
     }
+    let free = threads.saturating_sub(BUSY_TASKS.load(Ordering::Relaxed));
+    if free <= 1 {
+        return 1;
+    }
     (work_items / min_items_per_task)
-        .min(threads)
+        .min(free)
         .clamp(1, MAX_TASKS_PER_OPERATION)
 }
 
@@ -193,6 +236,44 @@ mod tests {
             panic!("the default is a pool");
         };
         assert!(threads.get() <= DEFAULT_POOL_THREADS);
+    }
+
+    #[test]
+    fn a_busy_pool_keeps_a_new_operation_whole() {
+        use std::{
+            sync::{mpsc, Mutex},
+            time::{Duration, Instant},
+        };
+        let Parallelism::Pool(threads) = parallelism() else {
+            return;
+        };
+        let threads = threads.get();
+        let (release, held) = mpsc::channel::<()>();
+        let held = Mutex::new(held);
+        std::thread::scope(|threads_scope| {
+            threads_scope.spawn(|| {
+                scope(|spawner| {
+                    for _ in 0..threads {
+                        spawner.spawn(|_| {
+                            // Holds a pool thread until the test releases it.
+                            let _ = held
+                                .lock()
+                                .expect("receiver")
+                                .recv_timeout(Duration::from_secs(10));
+                        });
+                    }
+                });
+            });
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while BUSY_TASKS.load(Ordering::Relaxed) < threads && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert_eq!(task_count(PARALLEL_MIN_BYTES, usize::MAX, 1), 1);
+            for _ in 0..threads {
+                let _ = release.send(());
+            }
+        });
+        assert!(task_count(PARALLEL_MIN_BYTES, usize::MAX, 1) >= 1);
     }
 
     #[test]
