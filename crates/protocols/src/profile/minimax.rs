@@ -83,7 +83,18 @@ pub(super) fn validate_chat(req: &ChatCompletionRequest) -> Result<(), validator
 /// message that followed it was dropped. A renderer whose template has no
 /// root branch (the vendor's earlier templates read `system` only) hands the
 /// root on as the leading system message itself.
+///
+/// A streamed request sent without `stream_options` gets `include_usage`
+/// on: the vendor's API ends every stream with a usage chunk, and its
+/// clients read the token counts (the reasoning tokens among them) from
+/// it. An explicit opt-out stays.
 pub(super) fn normalize_chat(req: &mut ChatCompletionRequest) {
+    if req.stream {
+        req.stream_options
+            .get_or_insert_default()
+            .include_usage
+            .get_or_insert(true);
+    }
     let is_root = |msg: &ChatMessage| matches!(msg, ChatMessage::Root { .. });
     let root_count = req.messages.iter().filter(|msg| is_root(msg)).count();
     if root_count == 0 || (root_count == 1 && req.messages.first().is_some_and(is_root)) {
