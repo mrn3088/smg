@@ -1135,8 +1135,16 @@ impl QwenVLProcessorBase {
     }
 }
 
-/// What a batch of images needs before any pixel is touched: the per-image
-/// targets and grids, the totals and the normalization.
+/// The work one image of a batch costs, as the weight its run is balanced
+/// by: the source pixels (a resize reads every source row, so a large image
+/// shrunk to the budget costs its source, not its target) plus the target
+/// pixels (the patch layout and the write).
+fn image_work(image: &DynamicImage, target_width: u32, target_height: u32) -> usize {
+    let source = image.width() as usize * image.height() as usize;
+    let target = target_width as usize * target_height as usize;
+    source + target
+}
+
 /// The items of a batch spread over `tasks` runs by weight: taken heaviest
 /// first, each to the lightest run so far, so the runs hold about equal
 /// shares of the work and no run is empty; at most `tasks` runs, at most one
@@ -1160,6 +1168,8 @@ fn weighted_runs<T>(items: Vec<T>, weights: &[usize], tasks: usize) -> Vec<Vec<T
     runs
 }
 
+/// What a batch of images needs before any pixel is touched: the per-image
+/// targets and grids, the totals and the normalization.
 struct ImageBatchPlan {
     plans: Vec<QwenImagePlan>,
     item_sizes: Vec<(u32, u32)>,
@@ -1342,7 +1352,11 @@ impl QwenVLProcessorBase {
             // images), filled by weight: no more queued on the pool than it
             // has threads free for, and about an equal share of work each.
             let per_image = &per_image;
-            let weights: Vec<usize> = batch.plans.iter().map(|plan| plan.patch_values).collect();
+            let weights: Vec<usize> = images
+                .iter()
+                .zip(&batch.plans)
+                .map(|(image, plan)| image_work(image, plan.target_width, plan.target_height))
+                .collect();
             let items = images
                 .iter()
                 .zip(&batch.plans)
@@ -1586,7 +1600,11 @@ impl VisionPreProcessor for QwenVLProcessorBase {
             // images), filled by weight: no more queued on the pool than it
             // has threads free for, and about an equal share of work each.
             let per_image = &per_image;
-            let weights: Vec<usize> = image_plans.iter().map(|plan| plan.patch_values).collect();
+            let weights: Vec<usize> = images
+                .iter()
+                .zip(image_plans)
+                .map(|(image, plan)| image_work(image, plan.target_width, plan.target_height))
+                .collect();
             let items = images
                 .iter()
                 .zip(image_plans)
@@ -1805,6 +1823,15 @@ impl VisionPreProcessor for QwenVLProcessorBase {
 
 #[cfg(test)]
 mod tests {
+    /// A large source shrunk to the pixel budget outweighs a small source
+    /// resized to the same budget: the resize reads every source row.
+    #[test]
+    fn image_work_counts_the_source_a_resize_reads() {
+        let big = image::DynamicImage::new_rgb8(4096, 3072);
+        let small = image::DynamicImage::new_rgb8(1000, 1000);
+        assert!(image_work(&big, 1148, 840) > 2 * image_work(&small, 1008, 1008));
+    }
+
     /// The heaviest items go first, each to the lightest run: two large
     /// images and a thumbnail on two runs put one large image in each.
     #[test]
