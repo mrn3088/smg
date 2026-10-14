@@ -1827,8 +1827,8 @@ mod tests {
     /// resized to the same budget: the resize reads every source row.
     #[test]
     fn image_work_counts_the_source_a_resize_reads() {
-        let big = image::DynamicImage::new_rgb8(4096, 3072);
-        let small = image::DynamicImage::new_rgb8(1000, 1000);
+        let big = DynamicImage::new_rgb8(4096, 3072);
+        let small = DynamicImage::new_rgb8(1000, 1000);
         assert!(image_work(&big, 1148, 840) > 2 * image_work(&small, 1008, 1008));
     }
 
