@@ -1302,23 +1302,36 @@ impl QwenVLProcessorBase {
             self.patchify_image_rgb_wire_into(img_ref, plan.grid_h, plan.grid_w, band, writer)
                 .err()
         };
-        let items = images
-            .iter()
-            .zip(&batch.plans)
-            .zip(bands)
-            .zip(errors.iter_mut());
-        if task_count(wire_len, images.len(), 1) <= 1 {
+        let parallel_tasks = task_count(wire_len, images.len(), 1);
+        if parallel_tasks <= 1 {
             // One image, the inline mode, or a pool busy with other
             // operations: on the calling thread, image after image.
-            for (((image, plan), band), error_slot) in items {
+            for (((image, plan), band), error_slot) in images
+                .iter()
+                .zip(&batch.plans)
+                .zip(bands)
+                .zip(errors.iter_mut())
+            {
                 *error_slot = per_image(image, plan, band);
             }
         } else {
+            // As many tasks as the split allows, each a run of images: no
+            // more queued on the pool than it has threads free for.
             let per_image = &per_image;
+            let per_task = images.len().div_ceil(parallel_tasks);
             parallel_scope(|scope| {
-                for (((image, plan), band), error_slot) in items {
+                for (((images, plans), bands), errors) in images
+                    .chunks(per_task)
+                    .zip(batch.plans.chunks(per_task))
+                    .zip(bands.chunks_mut(per_task))
+                    .zip(errors.chunks_mut(per_task))
+                {
                     scope.spawn(move |_| {
-                        *error_slot = per_image(image, plan, band);
+                        for (((image, plan), band), error_slot) in
+                            images.iter().zip(plans).zip(bands).zip(errors)
+                        {
+                            *error_slot = per_image(image, plan, band);
+                        }
                     });
                 }
             });
@@ -1533,23 +1546,36 @@ impl VisionPreProcessor for QwenVLProcessorBase {
             debug_assert!(outcome.is_err() || out_idx == band.len());
             outcome.err()
         };
-        let items = images
-            .iter()
-            .zip(image_plans)
-            .zip(bands)
-            .zip(errors.iter_mut());
-        if task_count(total_patch_values, images.len(), 1) <= 1 {
+        let parallel_tasks = task_count(total_patch_values, images.len(), 1);
+        if parallel_tasks <= 1 {
             // One image, the inline mode, or a pool busy with other
             // operations: on the calling thread, image after image.
-            for (((image, plan), band), error_slot) in items {
+            for (((image, plan), band), error_slot) in images
+                .iter()
+                .zip(image_plans)
+                .zip(bands)
+                .zip(errors.iter_mut())
+            {
                 *error_slot = per_image(image, plan, band);
             }
         } else {
+            // As many tasks as the split allows, each a run of images: no
+            // more queued on the pool than it has threads free for.
             let per_image = &per_image;
+            let per_task = images.len().div_ceil(parallel_tasks);
             parallel_scope(|scope| {
-                for (((image, plan), band), error_slot) in items {
+                for (((images, plans), bands), errors) in images
+                    .chunks(per_task)
+                    .zip(image_plans.chunks(per_task))
+                    .zip(bands.chunks_mut(per_task))
+                    .zip(errors.chunks_mut(per_task))
+                {
                     scope.spawn(move |_| {
-                        *error_slot = per_image(image, plan, band);
+                        for (((image, plan), band), error_slot) in
+                            images.iter().zip(plans).zip(bands).zip(errors)
+                        {
+                            *error_slot = per_image(image, plan, band);
+                        }
                     });
                 }
             });
