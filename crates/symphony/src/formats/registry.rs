@@ -152,12 +152,40 @@ impl Table {
         }
     }
 
-    /// The table `name` spells ([`Table::name`], in any case, spaces around it ignored); `None`
-    /// for any other text, a legacy parser's name among them.
+    /// The table named `name`, a table's own name ([`Self::name`]) in any case; `None` for any
+    /// other text, a legacy parser's name among them: [`Self::answering_to`] reads those.
     pub fn named(name: &str) -> Option<Self> {
         let name = name.trim().to_ascii_lowercase();
         Self::ALL.into_iter().find(|table| table.name() == name)
     }
+
+    /// The table that answers to `name`: the table named so ([`Self::named`]), else the one whose
+    /// format the legacy parser of that name reads ([`Self::ALIASES`]); `None` for any other text.
+    pub fn answering_to(name: &str) -> Option<Self> {
+        Self::named(name).or_else(|| {
+            let name = name.trim().to_ascii_lowercase();
+            let (_, table) = Self::ALIASES.iter().find(|(alias, _)| *alias == name)?;
+            Some(*table)
+        })
+    }
+
+    /// The other names a table answers to ([`Self::answering_to`]): the gateway's older tool and
+    /// reasoning parsers that read the table's format, so that a deployment that names one
+    /// (`--tool-call-parser qwen_xml`) reads with the table (`qwen3_tagged`) when the gateway
+    /// reads with Symphony. A parser that reads a format no table reads has no row and keeps its
+    /// own parser; so does `passthrough`, which leaves its channel as written, which no table
+    /// reads for.
+    pub const ALIASES: [(&str, Table); 9] = [
+        ("qwen", Table::Qwen3),
+        ("qwen_xml", Table::Qwen3Tagged),
+        ("qwen_coder", Table::Qwen3Tagged),
+        ("nemotron", Table::Qwen3Tagged),
+        ("glm47_moe", Table::Glm),
+        ("glm45_moe", Table::Glm4),
+        ("hy_v4", Table::Hy4),
+        ("deepseek_v41", Table::DeepSeekV4_1),
+        ("minimax", Table::MinimaxM2),
+    ];
 
     /// The table, built.
     pub fn format(self) -> Format {
@@ -1055,6 +1083,27 @@ mod tests {
             granite.turn_opener(),
             Some("<|start_of_role|>assistant<|end_of_role|>")
         );
+    }
+
+    #[test]
+    fn every_alias_spells_its_table_and_is_no_tables_own_name() {
+        let mut seen = std::collections::HashSet::new();
+        for (alias, table) in Table::ALIASES {
+            assert!(seen.insert(alias), "{alias} is listed twice");
+            assert!(
+                Table::ALL.iter().all(|own| own.name() != alias),
+                "{alias} is a table's own name"
+            );
+            assert_eq!(Table::named(alias), None, "{alias} is a table's own name");
+            assert_eq!(Table::answering_to(alias), Some(table), "{alias}");
+            assert_eq!(
+                Table::answering_to(&alias.to_ascii_uppercase()),
+                Some(table),
+                "{alias}"
+            );
+        }
+        assert_eq!(Table::answering_to("llama"), None);
+        assert_eq!(Table::answering_to("passthrough"), None);
     }
 
     #[test]
