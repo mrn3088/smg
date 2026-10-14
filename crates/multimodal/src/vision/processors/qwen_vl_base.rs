@@ -1137,6 +1137,29 @@ impl QwenVLProcessorBase {
 
 /// What a batch of images needs before any pixel is touched: the per-image
 /// targets and grids, the totals and the normalization.
+/// The items of a batch spread over `tasks` runs by weight: taken heaviest
+/// first, each to the lightest run so far, so the runs hold about equal
+/// shares of the work and no run is empty; at most `tasks` runs, at most one
+/// per item. Within a run the items keep their order.
+fn weighted_runs<T>(items: Vec<T>, weights: &[usize], tasks: usize) -> Vec<Vec<T>> {
+    let tasks = tasks.clamp(1, items.len().max(1));
+    let mut order: Vec<usize> = (0..items.len()).collect();
+    order.sort_by_key(|&index| std::cmp::Reverse(weights[index]));
+    let mut loads = vec![0usize; tasks];
+    let mut assignment = vec![0usize; items.len()];
+    for index in order {
+        let lightest = (0..tasks).min_by_key(|&run| loads[run]).unwrap_or(0);
+        loads[lightest] += weights[index];
+        assignment[index] = lightest;
+    }
+    let mut runs: Vec<Vec<T>> = (0..tasks).map(|_| Vec::new()).collect();
+    for (index, item) in items.into_iter().enumerate() {
+        runs[assignment[index]].push(item);
+    }
+    runs.retain(|run| !run.is_empty());
+    runs
+}
+
 struct ImageBatchPlan {
     plans: Vec<QwenImagePlan>,
     item_sizes: Vec<(u32, u32)>,
@@ -1315,21 +1338,21 @@ impl QwenVLProcessorBase {
                 *error_slot = per_image(image, plan, band);
             }
         } else {
-            // As many tasks as the split allows, each a run of images: no
-            // more queued on the pool than it has threads free for.
+            // Exactly as many tasks as the split allows (or as there are
+            // images), filled by weight: no more queued on the pool than it
+            // has threads free for, and about an equal share of work each.
             let per_image = &per_image;
-            let per_task = images.len().div_ceil(parallel_tasks);
+            let weights: Vec<usize> = batch.plans.iter().map(|plan| plan.patch_values).collect();
+            let items = images
+                .iter()
+                .zip(&batch.plans)
+                .zip(bands)
+                .zip(errors.iter_mut())
+                .collect();
             parallel_scope(|scope| {
-                for (((images, plans), bands), errors) in images
-                    .chunks(per_task)
-                    .zip(batch.plans.chunks(per_task))
-                    .zip(bands.chunks_mut(per_task))
-                    .zip(errors.chunks_mut(per_task))
-                {
+                for run in weighted_runs(items, &weights, parallel_tasks) {
                     scope.spawn(move |_| {
-                        for (((image, plan), band), error_slot) in
-                            images.iter().zip(plans).zip(bands).zip(errors)
-                        {
+                        for (((image, plan), band), error_slot) in run {
                             *error_slot = per_image(image, plan, band);
                         }
                     });
@@ -1559,21 +1582,21 @@ impl VisionPreProcessor for QwenVLProcessorBase {
                 *error_slot = per_image(image, plan, band);
             }
         } else {
-            // As many tasks as the split allows, each a run of images: no
-            // more queued on the pool than it has threads free for.
+            // Exactly as many tasks as the split allows (or as there are
+            // images), filled by weight: no more queued on the pool than it
+            // has threads free for, and about an equal share of work each.
             let per_image = &per_image;
-            let per_task = images.len().div_ceil(parallel_tasks);
+            let weights: Vec<usize> = image_plans.iter().map(|plan| plan.patch_values).collect();
+            let items = images
+                .iter()
+                .zip(image_plans)
+                .zip(bands)
+                .zip(errors.iter_mut())
+                .collect();
             parallel_scope(|scope| {
-                for (((images, plans), bands), errors) in images
-                    .chunks(per_task)
-                    .zip(image_plans.chunks(per_task))
-                    .zip(bands.chunks_mut(per_task))
-                    .zip(errors.chunks_mut(per_task))
-                {
+                for run in weighted_runs(items, &weights, parallel_tasks) {
                     scope.spawn(move |_| {
-                        for (((image, plan), band), error_slot) in
-                            images.iter().zip(plans).zip(bands).zip(errors)
-                        {
+                        for (((image, plan), band), error_slot) in run {
                             *error_slot = per_image(image, plan, band);
                         }
                     });
@@ -1782,6 +1805,43 @@ impl VisionPreProcessor for QwenVLProcessorBase {
 
 #[cfg(test)]
 mod tests {
+    /// The heaviest items go first, each to the lightest run: two large
+    /// images and a thumbnail on two runs put one large image in each.
+    #[test]
+    fn weighted_runs_put_the_heaviest_items_apart() {
+        let runs = weighted_runs(vec!["big-a", "big-b", "small"], &[100, 100, 1], 2);
+        let mut loads: Vec<usize> = runs
+            .iter()
+            .map(|run| {
+                run.iter()
+                    .map(|item| if item.starts_with("big") { 100 } else { 1 })
+                    .sum()
+            })
+            .collect();
+        loads.sort_unstable();
+        assert_eq!(loads, vec![100, 101]);
+    }
+
+    /// An uneven count still fills every run the split allows, and no run
+    /// is empty: nine items on eight runs make eight, five on four make
+    /// four, three on eight make three.
+    #[test]
+    fn weighted_runs_fill_every_run_the_split_allows() {
+        let runs =
+            |n: usize, tasks: usize| weighted_runs((0..n).collect::<Vec<_>>(), &vec![1; n], tasks);
+        assert_eq!(runs(9, 8).len(), 8);
+        assert_eq!(runs(5, 4).len(), 4);
+        assert_eq!(runs(3, 8).len(), 3);
+        assert!(runs(9, 8).iter().all(|run| !run.is_empty()));
+        let mut seen: Vec<usize> = runs(9, 8).into_iter().flatten().collect();
+        seen.sort_unstable();
+        assert_eq!(
+            seen,
+            (0..9).collect::<Vec<_>>(),
+            "every item lands exactly once"
+        );
+    }
+
     use image::RgbImage;
 
     use super::*;
