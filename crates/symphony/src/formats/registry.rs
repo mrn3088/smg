@@ -229,6 +229,24 @@ fn repository(model: &str) -> &str {
 /// Every group whose table is on main, in bellwether's slug order.
 const GROUPS: &[Group] = &[
     Group {
+        model: "skt/A.X-3.1-Light",
+        also: &[],
+        table: Table::Qwen2_5,
+        opener: Some("<|im_start|><|assistant|>"),
+    },
+    Group {
+        model: "skt/A.X-4.0",
+        also: &[],
+        table: Table::Qwen2_5,
+        opener: Some("<|im_start|><|assistant|>"),
+    },
+    Group {
+        model: "skt/A.X-4.0-Light",
+        also: &[],
+        table: Table::Qwen2_5,
+        opener: Some("<|im_start|><|assistant|>"),
+    },
+    Group {
         model: "openbmb/AgentCPM-Explore",
         also: &[],
         table: Table::Qwen3,
@@ -244,6 +262,42 @@ const GROUPS: &[Group] = &[
         model: "ai21labs/AI21-Jamba2-3B",
         also: &["AI21-Jamba2-Mini"],
         table: Table::Qwen2_5,
+        opener: None,
+    },
+    Group {
+        model: "inclusionAI/AReaL-boba-2-14B",
+        also: &[],
+        table: Table::Qwen3,
+        opener: None,
+    },
+    Group {
+        model: "inclusionAI/AReaL-boba-2-32B",
+        also: &[],
+        table: Table::Qwen3,
+        opener: None,
+    },
+    Group {
+        model: "inclusionAI/AReaL-boba-2-8B",
+        also: &["AReaL-boba-2-14B-Open", "AReaL-boba-2-8B-Open"],
+        table: Table::Qwen3,
+        opener: None,
+    },
+    Group {
+        model: "inclusionAI/AReaL-SEA-235B-A22B",
+        also: &["AReaL-tau2-merge-sft-235B"],
+        table: Table::Qwen3,
+        opener: None,
+    },
+    Group {
+        model: "inclusionAI/AReaL-tau2-telecom-sft-30B",
+        also: &["AReaL-tau2-airline-sft-30B", "AReaL-tau2-retail-sft-30B"],
+        table: Table::Qwen3,
+        opener: None,
+    },
+    Group {
+        model: "inclusionAI/AReaL-tau2-telecom-user-sft-30B",
+        also: &[],
+        table: Table::Qwen3,
         opener: None,
     },
     Group {
@@ -283,6 +337,36 @@ const GROUPS: &[Group] = &[
         opener: None,
     },
     Group {
+        model: "baichuan-inc/BaichuanMed-OCR-7B",
+        also: &["BaichuanMed-OCR-72B"],
+        table: Table::Qwen2_5,
+        opener: None,
+    },
+    Group {
+        model: "NousResearch/ByteDance-Seed-OSS-36B-Alternate-Tokenizer",
+        also: &[],
+        table: Table::Qwen2_5,
+        opener: Some("<|start_header_id|>assistant<|end_header_id|>"),
+    },
+    Group {
+        model: "arcee-ai/Caller",
+        also: &[],
+        table: Table::Qwen2_5,
+        opener: None,
+    },
+    Group {
+        model: "internlm/CapRL-3B",
+        also: &[],
+        table: Table::Qwen2_5,
+        opener: None,
+    },
+    Group {
+        model: "internlm/CapRL-Eval-3B",
+        also: &[],
+        table: Table::Qwen2_5,
+        opener: None,
+    },
+    Group {
         model: "internlm/CapRL-Qwen3VL-4B",
         also: &["CapRL-Qwen3VL-2B"],
         table: Table::Qwen3,
@@ -292,6 +376,12 @@ const GROUPS: &[Group] = &[
         model: "internlm/CapRL-Video-4B",
         also: &["inclusionAI/ArmorOCR"],
         table: Table::Qwen3,
+        opener: None,
+    },
+    Group {
+        model: "Salesforce/cogalign-internvl2_5-mpo-4b",
+        also: &["cogalign-internvl2_5-mpo-1b"],
+        table: Table::Qwen2_5,
         opener: None,
     },
     Group {
@@ -318,6 +408,12 @@ const GROUPS: &[Group] = &[
         model: "nvidia/Cosmos3-Edge-Policy-DROID",
         also: &[],
         table: Table::Qwen3Tagged,
+        opener: None,
+    },
+    Group {
+        model: "thu-coai/Crispers-7B-v1",
+        also: &["Crispers-14B-v1"],
+        table: Table::Qwen2_5,
         opener: None,
     },
     Group {
@@ -351,6 +447,18 @@ const GROUPS: &[Group] = &[
         opener: None,
     },
     Group {
+        model: "baidu/ERNIE-Image-Aes",
+        also: &[],
+        table: Table::Qwen2_5,
+        opener: None,
+    },
+    Group {
+        model: "LGAI-EXAONE/EXAONE-4.5-33B",
+        also: &[],
+        table: Table::Qwen3,
+        opener: Some("<|assistant|>"),
+    },
+    Group {
         model: "tiiuae/Falcon-H1-Tiny-90M-Instruct",
         also: &["Falcon-H1-Tiny-90M-Instruct-Curriculum"],
         table: Table::Qwen2_5,
@@ -360,6 +468,18 @@ const GROUPS: &[Group] = &[
         model: "tiiuae/Falcon-H1R-7B",
         also: &[],
         table: Table::Qwen3,
+        opener: None,
+    },
+    Group {
+        model: "microsoft/Fara1.5-27B",
+        also: &[],
+        table: Table::Qwen3Tagged,
+        opener: None,
+    },
+    Group {
+        model: "microsoft/Fara1.5-9B",
+        also: &["Fara1.5-4B"],
+        table: Table::Qwen3Tagged,
         opener: None,
     },
     Group {
@@ -441,9 +561,21 @@ const GROUPS: &[Group] = &[
         opener: Some("<|start_of_role|>assistant<|end_of_role|>"),
     },
     Group {
+        model: "h2oai/h2o-lightning-4b",
+        also: &[],
+        table: Table::Qwen3Tagged,
+        opener: None,
+    },
+    Group {
         model: "NousResearch/Hermes-4-14B",
         also: &[],
         table: Table::Qwen2_5,
+        opener: None,
+    },
+    Group {
+        model: "FreedomIntelligence/HuatuoGPT-3-27B",
+        also: &[],
+        table: Table::Qwen3Tagged,
         opener: None,
     },
     Group {
@@ -501,16 +633,55 @@ const GROUPS: &[Group] = &[
         opener: None,
     },
     Group {
+        model: "nvidia/Llama-3_1-Nemotron-Ultra-253B-CPT-v1",
+        also: &[],
+        table: Table::Json,
+        opener: Some("<|start_header_id|>assistant<|end_header_id|>"),
+    },
+    Group {
         model: "nvidia/Llama-3_3-Nemotron-Super-49B-v1_5",
         also: &[],
         table: Table::LlamaNemotron,
         opener: None,
     },
     Group {
+        model: "nvidia/Llama-3.1-Nemotron-8B-UltraLong-1M-Instruct",
+        also: &[],
+        table: Table::Json,
+        opener: Some("<|start_header_id|>assistant<|end_header_id|>"),
+    },
+    Group {
+        model: "nvidia/Llama-3.1-Nemotron-8B-UltraLong-2M-Instruct",
+        also: &[],
+        table: Table::Json,
+        opener: Some("<|start_header_id|>assistant<|end_header_id|>"),
+    },
+    Group {
+        model: "nvidia/Llama-3.1-Nemotron-8B-UltraLong-4M-Instruct",
+        also: &[],
+        table: Table::Json,
+        opener: Some("<|start_header_id|>assistant<|end_header_id|>"),
+    },
+    Group {
         model: "nvidia/Llama-3.1-Nemotron-Nano-8B-v1",
         also: &[],
         table: Table::LlamaNemotron,
         opener: None,
+    },
+    Group {
+        model: "nvidia/Llama-3.1-Nemotron-Safety-Guard-8B-v3",
+        also: &[],
+        table: Table::Json,
+        opener: Some("<|start_header_id|>assistant<|end_header_id|>"),
+    },
+    Group {
+        model: "nvidia/Llama-3.3-Nemotron-70B-Reward-Principle",
+        also: &[
+            "Llama-3.3-Nemotron-70B-Edit",
+            "Llama-3.3-Nemotron-70B-Feedback",
+        ],
+        table: Table::Json,
+        opener: Some("<|start_header_id|>assistant<|end_header_id|>"),
     },
     Group {
         model: "Salesforce/Llama-xLAM-2-8b-fc-r",

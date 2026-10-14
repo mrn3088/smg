@@ -179,9 +179,11 @@ What the table says beyond the others:
 - **A forced call is the list.** `Format::grammar` writes the `xlam` list, as the older parser's
   forced calls were written.
 
-What the table leaves open: no recorded group writes this format as its own (the Nemotron
-Llama-3.x groups that the older parser reads have content cases only), so the table stands on its
-unit tests until one does.
+What the table leaves open: the format is Llama 3.1's own template's, which six recorded groups
+write (Nemotron Ultra 253B CPT, the UltraLong 1M, 2M and 4M, Safety Guard 8B v3, the 70B Reward
+Principle): one call alone, `parameters` naming the arguments, and never a list, content beside a
+call or a thought, since the template refuses them; the list and the wrapping after an object rest
+on the unit tests until a group writes them.
 
 ## Llama Nemotron (`llama_nemotron`)
 

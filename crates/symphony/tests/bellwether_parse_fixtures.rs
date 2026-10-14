@@ -80,7 +80,7 @@ use serde::Deserialize;
 use symphony::{
     adapt,
     formats::{
-        deepseek_v4_1, dots3, for_model, gemma4, glm, glm4, groups, hy4, inkling, iquest,
+        deepseek_v4_1, dots3, for_model, gemma4, glm, glm4, groups, hy4, inkling, iquest, json,
         k2_horizon, kimi_k3, lfm2_5, ling, llama_nemotron, minicpm5, minimax_m2, minimax_m3,
         mistral, olmo3, plain, qwen2_5, qwen3, seed_oss, xlam,
     },
@@ -779,6 +779,125 @@ const MODELS: &[(&str, Family, GenerationPrompt)] = &[
         Family::LlamaNemotron,
         GenerationPrompt::Plain,
     ),
+    // Qwen3's JSON calls under other templates (bellwether main 8029536af5): EXAONE 4.5 opens the
+    // thought in the prompt under its own opener; AReaL-SEA and the tau2 SFT open it whatever the
+    // request says; the boba-2 line and the tau2 user SFT leave it to the model.
+    (
+        "areal-boba-2-14b",
+        Family::Qwen3,
+        GenerationPrompt::ModelWritesTheThought,
+    ),
+    (
+        "areal-boba-2-32b",
+        Family::Qwen3,
+        GenerationPrompt::ModelWritesTheThought,
+    ),
+    (
+        "areal-boba-2-8b",
+        Family::Qwen3,
+        GenerationPrompt::ModelWritesTheThought,
+    ),
+    (
+        "areal-sea-235b-a22b",
+        Family::Qwen3,
+        GenerationPrompt::AlwaysOpensTheThought,
+    ),
+    (
+        "areal-tau2-telecom-sft-30b",
+        Family::Qwen3,
+        GenerationPrompt::AlwaysOpensTheThought,
+    ),
+    (
+        "areal-tau2-telecom-user-sft-30b",
+        Family::Qwen3,
+        GenerationPrompt::ModelWritesTheThought,
+    ),
+    (
+        "exaone-4.5-33b",
+        Family::Qwen3,
+        GenerationPrompt::OpensTheThought,
+    ),
+    // Qwen2.5's JSON calls, no thought: A.X under its own opener (`<|im_start|><|assistant|>`,
+    // the object without newlines), the Seed-OSS alternate tokenizer under Llama 3's header, the
+    // rest under Qwen2.5's own template.
+    ("a.x-3.1-light", Family::Qwen2_5, GenerationPrompt::Plain),
+    ("a.x-4.0", Family::Qwen2_5, GenerationPrompt::Plain),
+    ("a.x-4.0-light", Family::Qwen2_5, GenerationPrompt::Plain),
+    (
+        "baichuanmed-ocr-7b",
+        Family::Qwen2_5,
+        GenerationPrompt::Plain,
+    ),
+    (
+        "bytedance-seed-oss-36b-alternate-tokenizer",
+        Family::Qwen2_5,
+        GenerationPrompt::Plain,
+    ),
+    ("caller", Family::Qwen2_5, GenerationPrompt::Plain),
+    ("caprl-3b", Family::Qwen2_5, GenerationPrompt::Plain),
+    ("caprl-eval-3b", Family::Qwen2_5, GenerationPrompt::Plain),
+    (
+        "cogalign-internvl2-5-mpo-4b",
+        Family::Qwen2_5,
+        GenerationPrompt::Plain,
+    ),
+    ("crispers-7b-v1", Family::Qwen2_5, GenerationPrompt::Plain),
+    ("ernie-image-aes", Family::Qwen2_5, GenerationPrompt::Plain),
+    // Qwen 3.5's tagged calls, the thought opened in the prompt and closed there when the
+    // request turns thinking off.
+    (
+        "fara1.5-27b",
+        Family::Qwen3Tagged,
+        GenerationPrompt::OpensTheThought,
+    ),
+    (
+        "fara1.5-9b",
+        Family::Qwen3Tagged,
+        GenerationPrompt::OpensTheThought,
+    ),
+    (
+        "h2o-lightning-4b",
+        Family::Qwen3Tagged,
+        GenerationPrompt::OpensTheThought,
+    ),
+    (
+        "huatuogpt-3-27b",
+        Family::Qwen3Tagged,
+        GenerationPrompt::OpensTheThought,
+    ),
+    // Llama 3.1's own template under the Nemotron Ultra, UltraLong, Safety Guard and Reward
+    // checkpoints: one call object alone in the turn, `parameters` naming the arguments, no
+    // thought; the template refuses parallel calls and content beside a call.
+    (
+        "llama-3-1-nemotron-ultra-253b-cpt-v1",
+        Family::Json,
+        GenerationPrompt::Plain,
+    ),
+    (
+        "llama-3.1-nemotron-8b-ultralong-1m-instruct",
+        Family::Json,
+        GenerationPrompt::Plain,
+    ),
+    (
+        "llama-3.1-nemotron-8b-ultralong-2m-instruct",
+        Family::Json,
+        GenerationPrompt::Plain,
+    ),
+    (
+        "llama-3.1-nemotron-8b-ultralong-4m-instruct",
+        Family::Json,
+        GenerationPrompt::Plain,
+    ),
+    (
+        "llama-3.1-nemotron-safety-guard-8b-v3",
+        Family::Json,
+        GenerationPrompt::Plain,
+    ),
+    (
+        "llama-3.3-nemotron-70b-reward-principle",
+        Family::Json,
+        GenerationPrompt::Plain,
+    ),
 ];
 
 /// The turn opener a model's own chat template writes, for a model that reads another family's
@@ -795,6 +914,38 @@ const OPENERS: &[(&str, &str)] = &[
         "<|start_of_role|>assistant<|end_of_role|>",
     ),
     ("laguna-xs.2", "<assistant>"),
+    ("a.x-3.1-light", "<|im_start|><|assistant|>"),
+    ("a.x-4.0", "<|im_start|><|assistant|>"),
+    ("a.x-4.0-light", "<|im_start|><|assistant|>"),
+    (
+        "bytedance-seed-oss-36b-alternate-tokenizer",
+        "<|start_header_id|>assistant<|end_header_id|>",
+    ),
+    ("exaone-4.5-33b", "<|assistant|>"),
+    (
+        "llama-3-1-nemotron-ultra-253b-cpt-v1",
+        "<|start_header_id|>assistant<|end_header_id|>",
+    ),
+    (
+        "llama-3.1-nemotron-8b-ultralong-1m-instruct",
+        "<|start_header_id|>assistant<|end_header_id|>",
+    ),
+    (
+        "llama-3.1-nemotron-8b-ultralong-2m-instruct",
+        "<|start_header_id|>assistant<|end_header_id|>",
+    ),
+    (
+        "llama-3.1-nemotron-8b-ultralong-4m-instruct",
+        "<|start_header_id|>assistant<|end_header_id|>",
+    ),
+    (
+        "llama-3.1-nemotron-safety-guard-8b-v3",
+        "<|start_header_id|>assistant<|end_header_id|>",
+    ),
+    (
+        "llama-3.3-nemotron-70b-reward-principle",
+        "<|start_header_id|>assistant<|end_header_id|>",
+    ),
 ];
 
 /// The table that reads a checkpoint's output.
@@ -825,6 +976,8 @@ enum Family {
     Lfm2_5,
     /// [`xlam`]: a bare JSON list of calls.
     Xlam,
+    /// [`json`]: one call object, or a list of them, alone in the turn.
+    Json,
     /// [`mistral`]: the tool's name, `[ARGS]` and the arguments object after `[TOOL_CALLS]`.
     Mistral,
     /// [`llama_nemotron`]: one JSON list of calls between `<TOOLCALL>` and `</TOOLCALL>`.
@@ -904,6 +1057,7 @@ impl Family {
             Self::Olmo3 => olmo3(),
             Self::Lfm2_5 => lfm2_5(),
             Self::Xlam => xlam(),
+            Self::Json => json(),
             Self::Mistral => mistral(),
             Self::LlamaNemotron => llama_nemotron(),
             Self::MinimaxM2 => minimax_m2(),
@@ -924,13 +1078,15 @@ impl Family {
         let list = match self {
             Self::Qwen3 | Self::Qwen2_5 => KNOWN_DIFFERENCES,
             Self::Qwen3Tagged | Self::MiMo => KNOWN_TAGGED_DIFFERENCES,
-            // Seed-OSS, Hy4, Olmo 3, xLAM, Kimi K3, K2-Horizon, Inkling, Gemma 4 and the plain
-            // table read neither of the probes' Qwen markers: `</think>` stays reasoning text and
-            // the fenced `<tool_call>` block stays content, as the reference says.
+            // Seed-OSS, Hy4, Olmo 3, xLAM, the json table, Kimi K3, K2-Horizon, Inkling, Gemma 4
+            // and the plain table read neither of the probes' Qwen markers: `</think>` stays
+            // reasoning text and the fenced `<tool_call>` block stays content, as the reference
+            // says.
             Self::SeedOss
             | Self::Hy4
             | Self::Olmo3
             | Self::Xlam
+            | Self::Json
             | Self::KimiK3
             | Self::K2Horizon
             | Self::Inkling
